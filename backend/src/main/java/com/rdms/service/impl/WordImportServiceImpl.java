@@ -25,6 +25,7 @@ import java.util.Deque;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -32,6 +33,9 @@ import java.util.regex.Pattern;
 @Slf4j
 @Service
 public class WordImportServiceImpl implements WordImportService {
+
+    private static final Set<String> SUPPORTED_EXTENSIONS = Set.of("doc", "docx", "wps");
+    private static final Set<String> SUPPORTED_DOC_TYPES = Set.of("REQUIREMENT", "DESIGN", "TESTCASE");
 
     private static final Pattern DECIMAL_TITLE_PATTERN = Pattern.compile("^((?:\\d+\\.)*\\d+)\\s+(.+)$");
     private static final Pattern NUMERIC_TITLE_PATTERN = Pattern.compile("^(\\d+)[、.．]\\s*(.+)$");
@@ -44,100 +48,110 @@ public class WordImportServiceImpl implements WordImportService {
         if (file == null || file.isEmpty()) {
             throw new IllegalArgumentException("上传文件不能为空");
         }
-        validateExtension(file.getOriginalFilename());
 
+        String normalizedDocType = normalizeDocType(docType);
+        String extension = validateAndGetExtension(file.getOriginalFilename());
         String groupId = StringUtils.hasText(documentGroupId) ? documentGroupId : UUID.randomUUID().toString();
 
-        List<DocCatalog> catalogs = new ArrayList<>();
-        Map<Integer, Long> latestCatalogByLevel = new HashMap<>();
-        Map<Long, StringBuilder> contentMap = new HashMap<>();
-        Deque<String> titlePath = new ArrayDeque<>();
-        Long currentCatalogId = null;
+        ParseContext context = new ParseContext(groupId, normalizedDocType);
 
         try {
-            List<RawParagraph> paragraphs = readParagraphs(file);
+            List<RawParagraph> paragraphs = readParagraphs(file.getBytes(), extension);
             for (RawParagraph paragraph : paragraphs) {
-                String text = cleanText(paragraph.getText());
-                String text = cleanText(paragraph.text());
-                if (text.isEmpty()) {
-                    continue;
-                }
-
-                HeadingInfo heading = parseHeading(paragraph, text);
-                if (heading != null) {
-                    while (titlePath.size() >= heading.getLevel()) {
-                HeadingInfo heading = parseHeading(paragraph.style(), text);
-                if (heading != null) {
-                    while (titlePath.size() >= heading.level()) {
-                        titlePath.pollLast();
-                    }
-                    DocCatalog catalog = buildCatalog(groupId, docType, heading, latestCatalogByLevel, titlePath);
-                    Db.save(catalog);
-                    catalogs.add(catalog);
-                    latestCatalogByLevel.put(heading.getLevel(), catalog.getId());
-                    clearDeeperLevels(latestCatalogByLevel, heading.getLevel());
-                    latestCatalogByLevel.put(heading.level(), catalog.getId());
-                    clearDeeperLevels(latestCatalogByLevel, heading.level());
-
-                    currentCatalogId = catalog.getId();
-                    contentMap.putIfAbsent(currentCatalogId, new StringBuilder());
-                    continue;
-                }
-
-                if (currentCatalogId != null) {
-                    contentMap.computeIfAbsent(currentCatalogId, key -> new StringBuilder())
-                            .append(text)
-                            .append("\n");
-                }
+                processParagraph(context, paragraph);
             }
         } catch (IOException e) {
             log.error("导入Word失败", e);
             throw new IllegalStateException("解析Word文档失败", e);
         }
 
-        contentMap.entrySet().stream()
-                .sorted(Map.Entry.comparingByKey(Comparator.naturalOrder()))
-                .forEach(entry -> {
-                    DocContent content = new DocContent();
-                    content.setCatalogId(entry.getKey());
-                    content.setDocumentGroupId(groupId);
-                    content.setContentText(entry.getValue().toString().trim());
-                    Db.save(content);
-                });
+        if (!context.getContents().isEmpty()) {
+            Db.saveBatch(context.getContents());
+        }
 
         return ImportResponse.builder()
                 .documentGroupId(groupId)
-                .docType(docType.toUpperCase())
-                .catalogCount(catalogs.size())
+                .docType(normalizedDocType)
+                .catalogCount(context.getCatalogs().size())
                 .build();
     }
 
-    private void validateExtension(String filename) {
-        String ext = getExtension(filename);
-        if (!("docx".equals(ext) || "doc".equals(ext) || "wps".equals(ext))) {
-            throw new IllegalArgumentException("仅支持 doc/docx/wps 格式");
+    private void processParagraph(ParseContext context, RawParagraph paragraph) {
+        String text = cleanText(paragraph.getText());
+        if (text.isEmpty()) {
+            return;
+        }
+
+        HeadingInfo heading = parseHeading(paragraph, text);
+        if (heading != null) {
+            while (context.getTitlePath().size() >= heading.getLevel()) {
+                context.getTitlePath().pollLast();
+            }
+            context.getTitlePath().addLast(heading.getTitle());
+
+            DocCatalog catalog = new DocCatalog();
+            catalog.setDocumentGroupId(context.getGroupId());
+            catalog.setDocType(context.getDocType());
+            catalog.setCatalogNo(heading.getCatalogNo());
+            catalog.setTitle(heading.getTitle());
+            catalog.setCatalogLevel(heading.getLevel());
+            catalog.setParentId(heading.getLevel() > 1 ? context.getLatestCatalogByLevel().get(heading.getLevel() - 1) : null);
+            catalog.setFullPath(String.join(" / ", context.getTitlePath()));
+
+            Db.save(catalog);
+            context.getCatalogs().add(catalog);
+            context.getLatestCatalogByLevel().put(heading.getLevel(), catalog.getId());
+            clearDeeperLevels(context.getLatestCatalogByLevel(), heading.getLevel());
+
+            DocContent content = new DocContent();
+            content.setCatalogId(catalog.getId());
+            content.setDocumentGroupId(context.getGroupId());
+            content.setContentText("");
+            context.getContents().add(content);
+            context.setCurrentContent(content);
+            return;
+        }
+
+        if (context.getCurrentContent() != null) {
+            String old = context.getCurrentContent().getContentText();
+            context.getCurrentContent().setContentText((old == null || old.isEmpty()) ? text : old + "\n" + text);
         }
     }
 
-    private List<RawParagraph> readParagraphs(MultipartFile file) throws IOException {
-        String ext = getExtension(file.getOriginalFilename());
-        byte[] bytes = file.getBytes();
+    private String normalizeDocType(String docType) {
+        if (!StringUtils.hasText(docType)) {
+            throw new IllegalArgumentException("docType 不能为空");
+        }
+        String normalized = docType.trim().toUpperCase();
+        if (!SUPPORTED_DOC_TYPES.contains(normalized)) {
+            throw new IllegalArgumentException("docType 仅支持 REQUIREMENT/DESIGN/TESTCASE");
+        }
+        return normalized;
+    }
 
-        if ("docx".equals(ext)) {
+    private String validateAndGetExtension(String filename) {
+        if (!StringUtils.hasText(filename) || !filename.contains(".")) {
+            throw new IllegalArgumentException("文件名无效");
+        }
+        String ext = filename.substring(filename.lastIndexOf('.') + 1).toLowerCase();
+        if (!SUPPORTED_EXTENSIONS.contains(ext)) {
+            throw new IllegalArgumentException("仅支持 doc/docx/wps 格式");
+        }
+        return ext;
+    }
+
+    private List<RawParagraph> readParagraphs(byte[] bytes, String extension) throws IOException {
+        if ("docx".equals(extension)) {
             return readDocxParagraphs(bytes);
         }
-        if ("doc".equals(ext)) {
+        if ("doc".equals(extension)) {
             return readDocParagraphs(bytes);
         }
-        if ("wps".equals(ext)) {
-            // WPS 通常可保存为 OLE(doc) 或 OOXML(docx)，优先按 doc 尝试，失败再按 docx 尝试
-            try {
-                return readDocParagraphs(bytes);
-            } catch (Exception ignore) {
-                return readDocxParagraphs(bytes);
-            }
+        try {
+            return readDocParagraphs(bytes);
+        } catch (Exception ignore) {
+            return readDocxParagraphs(bytes);
         }
-        throw new IllegalArgumentException("仅支持 doc/docx/wps 格式");
     }
 
     private List<RawParagraph> readDocxParagraphs(byte[] bytes) throws IOException {
@@ -146,7 +160,6 @@ public class WordImportServiceImpl implements WordImportService {
             for (XWPFParagraph paragraph : document.getParagraphs()) {
                 int levelHint = parseLevelHint(paragraph);
                 result.add(new RawParagraph(paragraph.getStyle(), paragraph.getText(), levelHint));
-                result.add(new RawParagraph(paragraph.getStyle(), paragraph.getText()));
             }
         }
         return result;
@@ -171,48 +184,13 @@ public class WordImportServiceImpl implements WordImportService {
             List<RawParagraph> result = new ArrayList<>();
             for (String p : extractor.getParagraphText()) {
                 result.add(new RawParagraph(null, p, 0));
-                result.add(new RawParagraph(null, p));
             }
             return result;
         }
     }
 
-    private String getExtension(String filename) {
-        if (!StringUtils.hasText(filename) || !filename.contains(".")) {
-            return "";
-        }
-        return filename.substring(filename.lastIndexOf('.') + 1).toLowerCase();
-    }
-
-    private DocCatalog buildCatalog(String groupId,
-                                    String docType,
-                                    HeadingInfo heading,
-                                    Map<Integer, Long> latestCatalogByLevel,
-                                    Deque<String> titlePath) {
-        DocCatalog catalog = new DocCatalog();
-        titlePath.addLast(heading.getTitle());
-        catalog.setDocumentGroupId(groupId);
-        catalog.setDocType(docType.toUpperCase());
-        catalog.setCatalogNo(heading.getCatalogNo());
-        catalog.setTitle(heading.getTitle());
-        catalog.setCatalogLevel(heading.getLevel());
-        catalog.setParentId(heading.getLevel() > 1 ? latestCatalogByLevel.get(heading.getLevel() - 1) : null);
-        titlePath.addLast(heading.title());
-        catalog.setDocumentGroupId(groupId);
-        catalog.setDocType(docType.toUpperCase());
-        catalog.setCatalogNo(heading.catalogNo());
-        catalog.setTitle(heading.title());
-        catalog.setCatalogLevel(heading.level());
-        catalog.setParentId(heading.level() > 1 ? latestCatalogByLevel.get(heading.level() - 1) : null);
-        catalog.setFullPath(String.join(" / ", titlePath));
-        return catalog;
-    }
-
     private HeadingInfo parseHeading(RawParagraph paragraph, String text) {
         Integer styleLevel = parseHeadingLevelByStyle(paragraph.getStyle());
-        Integer styleLevel = parseHeadingLevelByStyle(paragraph.style());
-    private HeadingInfo parseHeading(String style, String text) {
-        Integer styleLevel = parseHeadingLevelByStyle(style);
         if (styleLevel != null) {
             HeadingInfo byNo = parseByNumbering(text, styleLevel);
             return byNo != null ? byNo : new HeadingInfo(String.valueOf(styleLevel), text, styleLevel);
@@ -240,12 +218,6 @@ public class WordImportServiceImpl implements WordImportService {
 
         if (paragraph.getLevelHint() > 0 && isLikelyTitle(text)) {
             return new HeadingInfo(String.valueOf(paragraph.getLevelHint()), text, paragraph.getLevelHint());
-            return new HeadingInfo(bulletMatcher.group(1), bulletMatcher.group(2), Math.max(paragraph.levelHint(), 3));
-        }
-
-        if (paragraph.levelHint() > 0 && isLikelyTitle(text)) {
-            return new HeadingInfo(String.valueOf(paragraph.levelHint()), text, paragraph.levelHint());
-            return new HeadingInfo(bulletMatcher.group(1), bulletMatcher.group(2), 3);
         }
         return null;
     }
@@ -324,56 +296,50 @@ public class WordImportServiceImpl implements WordImportService {
         return text == null ? "" : text.replace('\u00A0', ' ').trim();
     }
 
-    private static class HeadingInfo {
-        private final String catalogNo;
-        private final String title;
-        private final int level;
+    private static class ParseContext {
+        private final String groupId;
+        private final String docType;
+        private final List<DocCatalog> catalogs = new ArrayList<>();
+        private final List<DocContent> contents = new ArrayList<>();
+        private final Map<Integer, Long> latestCatalogByLevel = new HashMap<>();
+        private final Deque<String> titlePath = new ArrayDeque<>();
+        private DocContent currentContent;
 
-        private HeadingInfo(String catalogNo, String title, int level) {
-            this.catalogNo = catalogNo;
-            this.title = title;
-            this.level = level;
+        private ParseContext(String groupId, String docType) {
+            this.groupId = groupId;
+            this.docType = docType;
         }
 
-        private String catalogNo() {
-            return catalogNo;
+        private String getGroupId() {
+            return groupId;
         }
 
-        private String title() {
-            return title;
+        private String getDocType() {
+            return docType;
         }
 
-        private int level() {
-            return level;
-        }
-    }
-
-    private static class RawParagraph {
-        private final String style;
-        private final String text;
-        private final int levelHint;
-
-        private RawParagraph(String style, String text, int levelHint) {
-            this.style = style;
-            this.text = text;
-            this.levelHint = levelHint;
+        private List<DocCatalog> getCatalogs() {
+            return catalogs;
         }
 
-        private String style() {
-            return style;
+        private List<DocContent> getContents() {
+            return contents;
         }
 
-        private String text() {
-            return text;
+        private Map<Integer, Long> getLatestCatalogByLevel() {
+            return latestCatalogByLevel;
         }
 
-        private int levelHint() {
-            return levelHint;
+        private Deque<String> getTitlePath() {
+            return titlePath;
         }
-    private record HeadingInfo(String catalogNo, String title, int level) {
-    }
 
-    private record RawParagraph(String style, String text, int levelHint) {
-    private record RawParagraph(String style, String text) {
+        private DocContent getCurrentContent() {
+            return currentContent;
+        }
+
+        private void setCurrentContent(DocContent currentContent) {
+            this.currentContent = currentContent;
+        }
     }
 }
