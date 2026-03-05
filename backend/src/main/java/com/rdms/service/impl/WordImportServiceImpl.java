@@ -20,7 +20,6 @@ import java.io.IOException;
 import java.math.BigInteger;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.List;
@@ -41,6 +40,9 @@ public class WordImportServiceImpl implements WordImportService {
     private static final Pattern NUMERIC_TITLE_PATTERN = Pattern.compile("^(\\d+)[、.．]\\s*(.+)$");
     private static final Pattern CN_SECTION_PATTERN = Pattern.compile("^第([一二三四五六七八九十百千万]+)([章节部分])\\s+(.+)$");
     private static final Pattern BULLET_LEVEL_PATTERN = Pattern.compile("^([（(]?[一二三四五六七八九十]+[）)])\\s*(.+)$");
+    private static final Pattern TOC_FIELD_PATTERN = Pattern.compile(
+            "HYPERLINK\\s+\\\\l\\s+_Toc\\d+\\s+(.+?)\\s+PAGEREF\\s+_Toc\\d+", Pattern.CASE_INSENSITIVE);
+    private static final Pattern TRAILING_PAGE_NO_PATTERN = Pattern.compile("^(.+?)\\s+(\\d{1,4})$");
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -190,34 +192,36 @@ public class WordImportServiceImpl implements WordImportService {
     }
 
     private HeadingInfo parseHeading(RawParagraph paragraph, String text) {
+        String headingText = preprocessHeadingText(text);
+
         Integer styleLevel = parseHeadingLevelByStyle(paragraph.getStyle());
         if (styleLevel != null) {
-            HeadingInfo byNo = parseByNumbering(text, styleLevel);
-            return byNo != null ? byNo : new HeadingInfo(String.valueOf(styleLevel), text, styleLevel);
+            HeadingInfo byNo = parseByNumbering(headingText, styleLevel);
+            return byNo != null ? byNo : new HeadingInfo(String.valueOf(styleLevel), headingText, styleLevel);
         }
 
-        HeadingInfo byDecimal = parseByDecimal(text);
+        HeadingInfo byDecimal = parseByDecimal(headingText);
         if (byDecimal != null) {
             return byDecimal;
         }
 
-        HeadingInfo byNumeric = parseByNumeric(text);
+        HeadingInfo byNumeric = parseByNumeric(headingText);
         if (byNumeric != null) {
             return byNumeric;
         }
 
-        HeadingInfo byChineseSection = parseByChineseSection(text);
+        HeadingInfo byChineseSection = parseByChineseSection(headingText);
         if (byChineseSection != null) {
             return byChineseSection;
         }
 
-        Matcher bulletMatcher = BULLET_LEVEL_PATTERN.matcher(text);
+        Matcher bulletMatcher = BULLET_LEVEL_PATTERN.matcher(headingText);
         if (bulletMatcher.matches()) {
             return new HeadingInfo(bulletMatcher.group(1), bulletMatcher.group(2), Math.max(paragraph.getLevelHint(), 3));
         }
 
-        if (paragraph.getLevelHint() > 0 && isLikelyTitle(text)) {
-            return new HeadingInfo(String.valueOf(paragraph.getLevelHint()), text, paragraph.getLevelHint());
+        if (paragraph.getLevelHint() > 0 && isLikelyTitle(headingText)) {
+            return new HeadingInfo(String.valueOf(paragraph.getLevelHint()), headingText, paragraph.getLevelHint());
         }
         return null;
     }
@@ -293,7 +297,29 @@ public class WordImportServiceImpl implements WordImportService {
     }
 
     private String cleanText(String text) {
-        return text == null ? "" : text.replace('\u00A0', ' ').trim();
+        if (text == null) {
+            return "";
+        }
+
+        String normalized = text.replace('\u00A0', ' ')
+                .replaceAll("[\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F]", " ")
+                .replaceAll("\\\\t", " ")
+                .replaceAll("\\s+", " ")
+                .trim();
+
+        Matcher tocMatcher = TOC_FIELD_PATTERN.matcher(normalized);
+        if (tocMatcher.find()) {
+            return tocMatcher.group(1).trim();
+        }
+        return normalized;
+    }
+
+    private String preprocessHeadingText(String text) {
+        Matcher pageNoMatcher = TRAILING_PAGE_NO_PATTERN.matcher(text);
+        if (pageNoMatcher.matches()) {
+            return pageNoMatcher.group(1).trim();
+        }
+        return text;
     }
 
     private static class ParseContext {
