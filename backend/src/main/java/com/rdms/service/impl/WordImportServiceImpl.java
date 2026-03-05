@@ -17,6 +17,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.math.BigInteger;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -33,6 +34,7 @@ import java.util.regex.Pattern;
 public class WordImportServiceImpl implements WordImportService {
 
     private static final Pattern DECIMAL_TITLE_PATTERN = Pattern.compile("^((?:\\d+\\.)*\\d+)\\s+(.+)$");
+    private static final Pattern NUMERIC_TITLE_PATTERN = Pattern.compile("^(\\d+)[、.．]\\s*(.+)$");
     private static final Pattern CN_SECTION_PATTERN = Pattern.compile("^第([一二三四五六七八九十百千万]+)([章节部分])\\s+(.+)$");
     private static final Pattern BULLET_LEVEL_PATTERN = Pattern.compile("^([（(]?[一二三四五六七八九十]+[）)])\\s*(.+)$");
 
@@ -60,6 +62,7 @@ public class WordImportServiceImpl implements WordImportService {
                     continue;
                 }
 
+                HeadingInfo heading = parseHeading(paragraph, text);
                 HeadingInfo heading = parseHeading(paragraph.style(), text);
                 if (heading != null) {
                     while (titlePath.size() >= heading.level()) {
@@ -136,10 +139,25 @@ public class WordImportServiceImpl implements WordImportService {
         List<RawParagraph> result = new ArrayList<>();
         try (XWPFDocument document = new XWPFDocument(new ByteArrayInputStream(bytes))) {
             for (XWPFParagraph paragraph : document.getParagraphs()) {
+                int levelHint = parseLevelHint(paragraph);
+                result.add(new RawParagraph(paragraph.getStyle(), paragraph.getText(), levelHint));
                 result.add(new RawParagraph(paragraph.getStyle(), paragraph.getText()));
             }
         }
         return result;
+    }
+
+    private int parseLevelHint(XWPFParagraph paragraph) {
+        BigInteger ilvl = paragraph.getNumIlvl();
+        if (ilvl != null) {
+            return ilvl.intValue() + 1;
+        }
+        if (paragraph.getCTP() != null
+                && paragraph.getCTP().getPPr() != null
+                && paragraph.getCTP().getPPr().getOutlineLvl() != null) {
+            return paragraph.getCTP().getPPr().getOutlineLvl().getVal().intValue() + 1;
+        }
+        return 0;
     }
 
     private List<RawParagraph> readDocParagraphs(byte[] bytes) throws IOException {
@@ -147,6 +165,7 @@ public class WordImportServiceImpl implements WordImportService {
              WordExtractor extractor = new WordExtractor(document)) {
             List<RawParagraph> result = new ArrayList<>();
             for (String p : extractor.getParagraphText()) {
+                result.add(new RawParagraph(null, p, 0));
                 result.add(new RawParagraph(null, p));
             }
             return result;
@@ -177,6 +196,8 @@ public class WordImportServiceImpl implements WordImportService {
         return catalog;
     }
 
+    private HeadingInfo parseHeading(RawParagraph paragraph, String text) {
+        Integer styleLevel = parseHeadingLevelByStyle(paragraph.style());
     private HeadingInfo parseHeading(String style, String text) {
         Integer styleLevel = parseHeadingLevelByStyle(style);
         if (styleLevel != null) {
@@ -189,6 +210,11 @@ public class WordImportServiceImpl implements WordImportService {
             return byDecimal;
         }
 
+        HeadingInfo byNumeric = parseByNumeric(text);
+        if (byNumeric != null) {
+            return byNumeric;
+        }
+
         HeadingInfo byChineseSection = parseByChineseSection(text);
         if (byChineseSection != null) {
             return byChineseSection;
@@ -196,6 +222,11 @@ public class WordImportServiceImpl implements WordImportService {
 
         Matcher bulletMatcher = BULLET_LEVEL_PATTERN.matcher(text);
         if (bulletMatcher.matches()) {
+            return new HeadingInfo(bulletMatcher.group(1), bulletMatcher.group(2), Math.max(paragraph.levelHint(), 3));
+        }
+
+        if (paragraph.levelHint() > 0 && isLikelyTitle(text)) {
+            return new HeadingInfo(String.valueOf(paragraph.levelHint()), text, paragraph.levelHint());
             return new HeadingInfo(bulletMatcher.group(1), bulletMatcher.group(2), 3);
         }
         return null;
@@ -205,6 +236,10 @@ public class WordImportServiceImpl implements WordImportService {
         HeadingInfo byDecimal = parseByDecimal(text);
         if (byDecimal != null) {
             return byDecimal;
+        }
+        HeadingInfo byNumeric = parseByNumeric(text);
+        if (byNumeric != null) {
+            return byNumeric;
         }
         HeadingInfo byChineseSection = parseByChineseSection(text);
         if (byChineseSection != null) {
@@ -222,6 +257,14 @@ public class WordImportServiceImpl implements WordImportService {
         String title = matcher.group(2);
         int level = number.split("\\.").length;
         return new HeadingInfo(number, title, level);
+    }
+
+    private HeadingInfo parseByNumeric(String text) {
+        Matcher matcher = NUMERIC_TITLE_PATTERN.matcher(text);
+        if (!matcher.matches()) {
+            return null;
+        }
+        return new HeadingInfo(matcher.group(1), matcher.group(2), 1);
     }
 
     private HeadingInfo parseByChineseSection(String text) {
@@ -251,6 +294,10 @@ public class WordImportServiceImpl implements WordImportService {
         return null;
     }
 
+    private boolean isLikelyTitle(String text) {
+        return text.length() <= 80 && !text.endsWith("。") && !text.endsWith(";") && !text.endsWith("；");
+    }
+
     private void clearDeeperLevels(Map<Integer, Long> latestCatalogByLevel, int currentLevel) {
         latestCatalogByLevel.keySet().removeIf(level -> level > currentLevel);
     }
@@ -262,6 +309,7 @@ public class WordImportServiceImpl implements WordImportService {
     private record HeadingInfo(String catalogNo, String title, int level) {
     }
 
+    private record RawParagraph(String style, String text, int levelHint) {
     private record RawParagraph(String style, String text) {
     }
 }
