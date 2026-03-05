@@ -1,6 +1,7 @@
 body {
   margin: 0;
   font-family: Arial, sans-serif;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   background: #f5f7fb;
 }
 
@@ -48,6 +49,36 @@ td {
 
 .graph-wrap {
   margin-top: 26px;
+  max-width: 1220px;
+  margin: 24px auto;
+  padding: 0 14px 20px;
+}
+
+.panel {
+  margin-bottom: 18px;
+}
+
+.title {
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.subtitle {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.upload-panel {
+  margin-bottom: 10px;
+}
+
+.actions {
+  display: flex;
+  gap: 10px;
+}
+
+.hint {
+  margin-top: 6px;
 }
 
 .graph {
@@ -55,6 +86,7 @@ td {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 24px;
+  gap: 18px;
   min-height: 320px;
 }
 
@@ -67,12 +99,21 @@ td {
 .node {
   border: 1px solid #dcdfe6;
   border-radius: 6px;
+.column h3 {
+  margin: 0;
+  color: #606266;
+}
+
+.node {
+  border: 1px solid #dcdfe6;
+  border-radius: 8px;
   padding: 8px;
   background: #fff;
   display: flex;
   flex-direction: column;
   gap: 4px;
   min-height: 52px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
 }
 
 .node .no {
@@ -83,6 +124,17 @@ td {
 .node.req { border-left: 4px solid #409eff; }
 .node.design { border-left: 4px solid #67c23a; }
 .node.test { border-left: 4px solid #e6a23c; }
+.node.req {
+  border-left: 4px solid #409eff;
+}
+
+.node.design {
+  border-left: 4px solid #67c23a;
+}
+
+.node.test {
+  border-left: 4px solid #e6a23c;
+}
 
 .edges {
   position: absolute;

@@ -47,6 +47,64 @@
 
     <section v-if="graphColumns.requirement.length || graphColumns.design.length || graphColumns.test.length" class="graph-wrap">
       <h2>需求 → 设计 → 测试 追踪图</h2>
+    <el-card shadow="never" class="panel">
+      <template #header>
+        <div class="title">需求/设计/测试文档追踪矩阵</div>
+      </template>
+
+      <el-form label-position="top" class="upload-panel">
+        <el-form-item label="文档组ID（第一次可留空自动生成）">
+          <el-input v-model="documentGroupId" placeholder="例如: project-a-v1" clearable />
+        </el-form-item>
+
+        <el-form-item label="文档类型">
+          <el-select v-model="docType" style="width: 100%">
+            <el-option value="REQUIREMENT" label="需求文档" />
+            <el-option value="DESIGN" label="设计文档" />
+            <el-option value="TESTCASE" label="测试用例文档" />
+          </el-select>
+        </el-form-item>
+
+        <el-form-item label="上传文件（支持 .doc/.docx/.wps）">
+          <el-upload
+            :auto-upload="false"
+            :show-file-list="true"
+            :limit="1"
+            accept=".doc,.docx,.wps"
+            :on-change="onFileChange"
+            :on-remove="onFileRemove"
+          >
+            <el-button type="primary" plain>选择文件</el-button>
+          </el-upload>
+        </el-form-item>
+
+        <div class="actions">
+          <el-button type="primary" :disabled="!file" @click="upload">导入文档</el-button>
+          <el-button :disabled="!documentGroupId" @click="loadTrace">生成追踪矩阵</el-button>
+        </div>
+      </el-form>
+
+      <el-alert :title="message" type="info" :closable="false" show-icon class="hint" />
+    </el-card>
+
+    <el-card v-if="traceRows.length" shadow="never" class="panel">
+      <template #header>
+        <div class="subtitle">追踪矩阵</div>
+      </template>
+      <el-table :data="traceRows" border stripe>
+        <el-table-column prop="requirementCatalog" label="需求章节" min-width="110" />
+        <el-table-column prop="requirementTitle" label="需求标题" min-width="180" />
+        <el-table-column prop="designCatalog" label="设计章节" min-width="110" />
+        <el-table-column prop="designTitle" label="设计标题" min-width="180" />
+        <el-table-column prop="testCatalog" label="测试章节" min-width="110" />
+        <el-table-column prop="testTitle" label="测试标题" min-width="180" />
+      </el-table>
+    </el-card>
+
+    <el-card v-if="graphColumns.requirement.length || graphColumns.design.length || graphColumns.test.length" shadow="never" class="panel">
+      <template #header>
+        <div class="subtitle">需求 → 设计 → 测试 追踪图</div>
+      </template>
       <div class="graph" ref="graphRef">
         <svg class="edges" :width="svgSize.width" :height="svgSize.height">
           <defs>
@@ -90,11 +148,13 @@
         </div>
       </div>
     </section>
+    </el-card>
   </main>
 </template>
 
 <script setup>
 import { nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { ElMessage } from 'element-plus'
 import { getTraceGraph, getTraceMatrix, importDocument } from './api/document'
 
 const file = ref(null)
@@ -140,6 +200,51 @@ const loadTrace = async () => {
   await nextTick()
   redrawEdges(graphResp.data.edges || [])
   message.value = `已生成追踪矩阵 ${matrixResp.data.length} 行，追踪边 ${graphEdges.value.length} 条`
+const onFileChange = (uploadFile) => {
+  file.value = uploadFile.raw || null
+}
+
+const onFileRemove = () => {
+  file.value = null
+}
+
+const upload = async () => {
+  try {
+    const formData = new FormData()
+    formData.append('file', file.value)
+    formData.append('docType', docType.value)
+    if (documentGroupId.value) {
+      formData.append('documentGroupId', documentGroupId.value)
+    }
+
+    const { data } = await importDocument(formData)
+    documentGroupId.value = data.documentGroupId
+    message.value = `导入成功：${data.docType}，解析目录 ${data.catalogCount} 条，文档组ID=${data.documentGroupId}`
+    ElMessage.success('文档导入成功')
+  } catch (error) {
+    ElMessage.error('导入失败，请检查文件格式或服务状态')
+  }
+}
+
+const loadTrace = async () => {
+  try {
+    const [matrixResp, graphResp] = await Promise.all([
+      getTraceMatrix(documentGroupId.value),
+      getTraceGraph(documentGroupId.value)
+    ])
+    traceRows.value = matrixResp.data
+
+    const nodes = graphResp.data.nodes || []
+    graphColumns.requirement = nodes.filter((n) => n.type === 'REQUIREMENT')
+    graphColumns.design = nodes.filter((n) => n.type === 'DESIGN')
+    graphColumns.test = nodes.filter((n) => n.type === 'TESTCASE')
+
+    await nextTick()
+    redrawEdges(graphResp.data.edges || [])
+    message.value = `已生成追踪矩阵 ${matrixResp.data.length} 行，追踪边 ${graphEdges.value.length} 条`
+  } catch (error) {
+    ElMessage.error('查询追踪关系失败，请检查文档组ID')
+  }
 }
 
 const redrawEdges = (edges) => {

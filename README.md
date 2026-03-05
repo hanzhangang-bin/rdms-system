@@ -1,6 +1,7 @@
 # RDMS 文档目录识别与追踪示例
 
 本项目基于 **Java + Spring Boot + MyBatis-Plus + Vue3**，用于实现：
+本项目基于 **Java + Spring Boot + MyBatis-Plus + Vue3 + Vite + Element Plus**，用于实现：
 
 1. 导入需求/设计/测试用例 Word（`.doc` / `.docx` / `.wps`）文档；
 2. 识别 Word 目录（标题层级）和目录对应正文内容；
@@ -11,6 +12,7 @@
 
 - `backend`：Spring Boot 后端服务
 - `frontend`：Vue3 前端页面
+- `frontend`：Vue3 + Vite + Element Plus 前端页面
 - `backend/schema.sql`：建表脚本
 
 ## 快速启动
