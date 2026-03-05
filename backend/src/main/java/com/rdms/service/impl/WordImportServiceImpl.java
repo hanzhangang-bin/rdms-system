@@ -27,6 +27,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -68,8 +69,9 @@ public class WordImportServiceImpl implements WordImportService {
 
         try {
             List<RawParagraph> paragraphs = readParagraphs(file.getBytes(), extension);
+            Map<String, HeadingInfo> tocHints = extractTocHints(paragraphs);
             for (RawParagraph paragraph : paragraphs) {
-                processParagraph(context, paragraph);
+                processParagraph(context, paragraph, tocHints);
             }
         } catch (IOException e) {
             log.error("导入Word失败", e);
@@ -136,13 +138,17 @@ public class WordImportServiceImpl implements WordImportService {
         return roots;
     }
 
-    private void processParagraph(ParseContext context, RawParagraph paragraph) {
+    private void processParagraph(ParseContext context, RawParagraph paragraph, Map<String, HeadingInfo> tocHints) {
+        if (isTocFieldLine(paragraph.getText())) {
+            return;
+        }
+
         String text = cleanText(paragraph.getText());
         if (text.isEmpty()) {
             return;
         }
 
-        HeadingInfo heading = parseHeading(paragraph, text);
+        HeadingInfo heading = parseHeading(paragraph, text, tocHints);
         if (heading != null) {
             while (context.getTitlePath().size() >= heading.getLevel()) {
                 context.getTitlePath().pollLast();
@@ -176,6 +182,43 @@ public class WordImportServiceImpl implements WordImportService {
             String old = context.getCurrentContent().getContentText();
             context.getCurrentContent().setContentText((old == null || old.isEmpty()) ? text : old + "\n" + text);
         }
+    }
+
+    private Map<String, HeadingInfo> extractTocHints(List<RawParagraph> paragraphs) {
+        Map<String, HeadingInfo> hints = new LinkedHashMap<>();
+        for (RawParagraph paragraph : paragraphs) {
+            String raw = paragraph.getText();
+            if (!isTocFieldLine(raw)) {
+                continue;
+            }
+            String normalized = cleanText(raw);
+            if (!StringUtils.hasText(normalized)) {
+                continue;
+            }
+            String headingText = preprocessHeadingText(normalized);
+            HeadingInfo parsed = parseByDecimal(headingText);
+            if (parsed == null) {
+                parsed = parseByNumeric(headingText);
+            }
+            if (parsed == null) {
+                parsed = parseByChineseSection(headingText);
+            }
+            if (parsed == null && isLikelyTitle(headingText)) {
+                parsed = new HeadingInfo(String.valueOf(hints.size() + 1), headingText, 1);
+            }
+            if (parsed != null) {
+                hints.put(normalizeKey(parsed.getTitle()), parsed);
+            }
+        }
+        return hints;
+    }
+
+    private boolean isTocFieldLine(String rawText) {
+        return rawText != null && rawText.toUpperCase().contains("HYPERLINK") && rawText.contains("_Toc");
+    }
+
+    private String normalizeKey(String text) {
+        return text == null ? "" : text.replaceAll("\\s+", "").toLowerCase();
     }
 
     private String normalizeDocType(String docType) {
@@ -249,7 +292,7 @@ public class WordImportServiceImpl implements WordImportService {
         }
     }
 
-    private HeadingInfo parseHeading(RawParagraph paragraph, String text) {
+    private HeadingInfo parseHeading(RawParagraph paragraph, String text, Map<String, HeadingInfo> tocHints) {
         String headingText = preprocessHeadingText(text);
 
         Integer styleLevel = parseHeadingLevelByStyle(paragraph.getStyle());
@@ -276,6 +319,11 @@ public class WordImportServiceImpl implements WordImportService {
         Matcher bulletMatcher = BULLET_LEVEL_PATTERN.matcher(headingText);
         if (bulletMatcher.matches()) {
             return new HeadingInfo(bulletMatcher.group(1), bulletMatcher.group(2), Math.max(paragraph.getLevelHint(), 3));
+        }
+
+        HeadingInfo byToc = tocHints.get(normalizeKey(headingText));
+        if (byToc != null) {
+            return new HeadingInfo(byToc.getCatalogNo(), headingText, byToc.getLevel());
         }
 
         if (paragraph.getLevelHint() > 0 && isLikelyTitle(headingText)) {
