@@ -60,3 +60,13 @@ npm run dev
 ## 目录与内容关联
 
 目录与内容通过 `doc_content.catalog_id -> doc_catalog.id` 关联。可通过 `catalog-content-tree` 接口一次性获取目录树及每个目录节点对应正文内容。
+
+
+## 内容格式化落库
+
+导入时会将正文转换为 HTML 存储到 `doc_content.content_text`：
+- 普通段落转 `<p>`
+- 表格转 `<table>`
+- 图片转 `<img src="data:*;base64,...">`
+
+这样目录节点与对应内容不仅可关联，还能保留图片、表格等格式。

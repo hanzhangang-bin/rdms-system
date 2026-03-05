@@ -13,8 +13,16 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.poi.hwpf.HWPFDocument;
 import org.apache.poi.hwpf.extractor.WordExtractor;
+import org.apache.poi.xwpf.usermodel.BodyElementType;
+import org.apache.poi.xwpf.usermodel.IBodyElement;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
 import org.apache.poi.xwpf.usermodel.XWPFParagraph;
+import org.apache.poi.xwpf.usermodel.XWPFPicture;
+import org.apache.poi.xwpf.usermodel.XWPFPictureData;
+import org.apache.poi.xwpf.usermodel.XWPFRun;
+import org.apache.poi.xwpf.usermodel.XWPFTable;
+import org.apache.poi.xwpf.usermodel.XWPFTableCell;
+import org.apache.poi.xwpf.usermodel.XWPFTableRow;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -25,6 +33,7 @@ import java.io.IOException;
 import java.math.BigInteger;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -180,9 +189,17 @@ public class WordImportServiceImpl implements WordImportService {
         }
 
         if (context.getCurrentContent() != null) {
-            String old = context.getCurrentContent().getContentText();
-            context.getCurrentContent().setContentText((old == null || old.isEmpty()) ? text : old + "\n" + text);
+            appendHtml(context.getCurrentContent(), paragraph, text);
         }
+    }
+
+    private void appendHtml(DocContent currentContent, RawParagraph paragraph, String fallbackText) {
+        String old = currentContent.getContentText();
+        String html = paragraph.getHtml();
+        if (!StringUtils.hasText(html)) {
+            html = "<p>" + escapeHtml(fallbackText) + "</p>";
+        }
+        currentContent.setContentText((old == null || old.isEmpty()) ? html : old + html);
     }
 
     private Map<String, HeadingInfo> extractTocHints(List<RawParagraph> paragraphs) {
@@ -261,12 +278,56 @@ public class WordImportServiceImpl implements WordImportService {
     private List<RawParagraph> readDocxParagraphs(byte[] bytes) throws IOException {
         List<RawParagraph> result = new ArrayList<>();
         try (XWPFDocument document = new XWPFDocument(new ByteArrayInputStream(bytes))) {
-            for (XWPFParagraph paragraph : document.getParagraphs()) {
-                int levelHint = parseLevelHint(paragraph);
-                result.add(new RawParagraph(paragraph.getStyle(), paragraph.getText(), levelHint));
+            for (IBodyElement bodyElement : document.getBodyElements()) {
+                if (bodyElement.getElementType() == BodyElementType.PARAGRAPH) {
+                    XWPFParagraph paragraph = (XWPFParagraph) bodyElement;
+                    int levelHint = parseLevelHint(paragraph);
+                    result.add(new RawParagraph(paragraph.getStyle(), paragraph.getText(), levelHint, paragraphToHtml(paragraph)));
+                } else if (bodyElement.getElementType() == BodyElementType.TABLE) {
+                    XWPFTable table = (XWPFTable) bodyElement;
+                    result.add(new RawParagraph(null, table.getText(), 0, tableToHtml(table)));
+                }
             }
         }
         return result;
+    }
+
+    private String paragraphToHtml(XWPFParagraph paragraph) {
+        StringBuilder inner = new StringBuilder();
+        for (XWPFRun run : paragraph.getRuns()) {
+            if (run.text() != null) {
+                inner.append(escapeHtml(run.text()));
+            }
+            for (XWPFPicture picture : run.getEmbeddedPictures()) {
+                XWPFPictureData pictureData = picture.getPictureData();
+                if (pictureData != null && pictureData.getData() != null) {
+                    String mime = pictureData.getPackagePart() != null
+                            ? pictureData.getPackagePart().getContentType() : "image/png";
+                    String base64 = Base64.getEncoder().encodeToString(pictureData.getData());
+                    inner.append("<img src=\"")
+                            .append("data:").append(mime).append(";base64,").append(base64)
+                            .append("\" alt=\"image\" />");
+                }
+            }
+        }
+
+        if (inner.length() == 0) {
+            return "";
+        }
+        return "<p>" + inner + "</p>";
+    }
+
+    private String tableToHtml(XWPFTable table) {
+        StringBuilder html = new StringBuilder("<table border=\"1\" style=\"border-collapse:collapse;\">");
+        for (XWPFTableRow row : table.getRows()) {
+            html.append("<tr>");
+            for (XWPFTableCell cell : row.getTableCells()) {
+                html.append("<td>").append(escapeHtml(cell.getText())).append("</td>");
+            }
+            html.append("</tr>");
+        }
+        html.append("</table>");
+        return html.toString();
     }
 
     private int parseLevelHint(XWPFParagraph paragraph) {
@@ -287,7 +348,9 @@ public class WordImportServiceImpl implements WordImportService {
              WordExtractor extractor = new WordExtractor(document)) {
             List<RawParagraph> result = new ArrayList<>();
             for (String p : extractor.getParagraphText()) {
-                result.add(new RawParagraph(null, p, 0));
+                String clean = cleanText(p);
+                String html = clean.isEmpty() ? "" : "<p>" + escapeHtml(clean) + "</p>";
+                result.add(new RawParagraph(null, p, 0, html));
             }
             return result;
         }
@@ -384,7 +447,6 @@ public class WordImportServiceImpl implements WordImportService {
         return new HeadingInfo(no, title, level);
     }
 
-
     private HeadingInfo parseByChineseItem(String text) {
         Matcher matcher = CN_LEVEL_PATTERN.matcher(text);
         if (!matcher.matches()) {
@@ -424,7 +486,7 @@ public class WordImportServiceImpl implements WordImportService {
 
         String normalized = text.replace('\u00A0', ' ')
                 .replaceAll("[\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F]", " ")
-                .replaceAll("\\\\t", " ")
+                .replace("\t", " ")
                 .replaceAll("\\s+", " ")
                 .trim();
 
@@ -441,6 +503,18 @@ public class WordImportServiceImpl implements WordImportService {
             return pageNoMatcher.group(1).trim();
         }
         return text;
+    }
+
+    private String escapeHtml(String text) {
+        if (text == null) {
+            return "";
+        }
+        return text
+                .replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("\"", "&quot;")
+                .replace("'", "&#39;");
     }
 
     private static class ParseContext {
