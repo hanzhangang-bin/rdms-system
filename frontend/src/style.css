@@ -1,0 +1,91 @@
+body {
+  margin: 0;
+  font-family: Arial, sans-serif;
+  background: #f5f7fb;
+}
+
+.container {
+  max-width: 1180px;
+  margin: 30px auto;
+  background: #fff;
+  border-radius: 8px;
+  padding: 24px;
+}
+
+.upload-panel {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.actions {
+  display: flex;
+  gap: 10px;
+}
+
+button {
+  width: fit-content;
+  padding: 8px 14px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 16px;
+}
+
+th,
+td {
+  border: 1px solid #e4e7ed;
+  padding: 8px;
+  text-align: left;
+}
+
+.hint {
+  color: #5c6b77;
+}
+
+.graph-wrap {
+  margin-top: 26px;
+}
+
+.graph {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 24px;
+  min-height: 320px;
+}
+
+.column {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.node {
+  border: 1px solid #dcdfe6;
+  border-radius: 6px;
+  padding: 8px;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 52px;
+}
+
+.node .no {
+  font-weight: 700;
+  color: #34495e;
+}
+
+.node.req { border-left: 4px solid #409eff; }
+.node.design { border-left: 4px solid #67c23a; }
+.node.test { border-left: 4px solid #e6a23c; }
+
+.edges {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
