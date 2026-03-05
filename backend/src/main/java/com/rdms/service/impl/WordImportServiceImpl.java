@@ -43,10 +43,11 @@ public class WordImportServiceImpl implements WordImportService {
     private static final Set<String> SUPPORTED_EXTENSIONS = Set.of("doc", "docx", "wps");
     private static final Set<String> SUPPORTED_DOC_TYPES = Set.of("REQUIREMENT", "DESIGN", "TESTCASE");
 
-    private static final Pattern DECIMAL_TITLE_PATTERN = Pattern.compile("^((?:\\d+\\.)*\\d+)\\s+(.+)$");
-    private static final Pattern NUMERIC_TITLE_PATTERN = Pattern.compile("^(\\d+)[、.．]\\s*(.+)$");
+    private static final Pattern DECIMAL_TITLE_PATTERN = Pattern.compile("^((?:\\d+\\.)*\\d+)(?:[\\s、.．:：）)]*)\\s*(.+)$");
+    private static final Pattern NUMERIC_TITLE_PATTERN = Pattern.compile("^(\\d+)(?:[、.．:：）)]|\\s)+(.+)$");
     private static final Pattern CN_SECTION_PATTERN = Pattern.compile("^第([一二三四五六七八九十百千万]+)([章节部分])\\s+(.+)$");
     private static final Pattern BULLET_LEVEL_PATTERN = Pattern.compile("^([（(]?[一二三四五六七八九十]+[）)])\\s*(.+)$");
+    private static final Pattern CN_LEVEL_PATTERN = Pattern.compile("^([一二三四五六七八九十]+)[、.．]\\s*(.+)$");
     private static final Pattern TOC_FIELD_PATTERN = Pattern.compile(
             "HYPERLINK\\s+\\\\l\\s+_Toc\\d+\\s+(.+?)\\s+PAGEREF\\s+_Toc\\d+", Pattern.CASE_INSENSITIVE);
     private static final Pattern TRAILING_PAGE_NO_PATTERN = Pattern.compile("^(.+?)\\s+(\\d{1,4})$");
@@ -321,6 +322,11 @@ public class WordImportServiceImpl implements WordImportService {
             return new HeadingInfo(bulletMatcher.group(1), bulletMatcher.group(2), Math.max(paragraph.getLevelHint(), 3));
         }
 
+        HeadingInfo byCnLevel = parseByChineseItem(headingText);
+        if (byCnLevel != null) {
+            return byCnLevel;
+        }
+
         HeadingInfo byToc = tocHints.get(normalizeKey(headingText));
         if (byToc != null) {
             return new HeadingInfo(byToc.getCatalogNo(), headingText, byToc.getLevel());
@@ -376,6 +382,15 @@ public class WordImportServiceImpl implements WordImportService {
         String title = matcher.group(3);
         int level = "章".equals(matcher.group(2)) ? 1 : 2;
         return new HeadingInfo(no, title, level);
+    }
+
+
+    private HeadingInfo parseByChineseItem(String text) {
+        Matcher matcher = CN_LEVEL_PATTERN.matcher(text);
+        if (!matcher.matches()) {
+            return null;
+        }
+        return new HeadingInfo(matcher.group(1), matcher.group(2), 2);
     }
 
     private Integer parseHeadingLevelByStyle(String style) {
