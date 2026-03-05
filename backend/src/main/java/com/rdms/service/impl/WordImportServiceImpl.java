@@ -57,12 +57,15 @@ public class WordImportServiceImpl implements WordImportService {
         try {
             List<RawParagraph> paragraphs = readParagraphs(file);
             for (RawParagraph paragraph : paragraphs) {
+                String text = cleanText(paragraph.getText());
                 String text = cleanText(paragraph.text());
                 if (text.isEmpty()) {
                     continue;
                 }
 
                 HeadingInfo heading = parseHeading(paragraph, text);
+                if (heading != null) {
+                    while (titlePath.size() >= heading.getLevel()) {
                 HeadingInfo heading = parseHeading(paragraph.style(), text);
                 if (heading != null) {
                     while (titlePath.size() >= heading.level()) {
@@ -71,6 +74,8 @@ public class WordImportServiceImpl implements WordImportService {
                     DocCatalog catalog = buildCatalog(groupId, docType, heading, latestCatalogByLevel, titlePath);
                     Db.save(catalog);
                     catalogs.add(catalog);
+                    latestCatalogByLevel.put(heading.getLevel(), catalog.getId());
+                    clearDeeperLevels(latestCatalogByLevel, heading.getLevel());
                     latestCatalogByLevel.put(heading.level(), catalog.getId());
                     clearDeeperLevels(latestCatalogByLevel, heading.level());
 
@@ -185,6 +190,13 @@ public class WordImportServiceImpl implements WordImportService {
                                     Map<Integer, Long> latestCatalogByLevel,
                                     Deque<String> titlePath) {
         DocCatalog catalog = new DocCatalog();
+        titlePath.addLast(heading.getTitle());
+        catalog.setDocumentGroupId(groupId);
+        catalog.setDocType(docType.toUpperCase());
+        catalog.setCatalogNo(heading.getCatalogNo());
+        catalog.setTitle(heading.getTitle());
+        catalog.setCatalogLevel(heading.getLevel());
+        catalog.setParentId(heading.getLevel() > 1 ? latestCatalogByLevel.get(heading.getLevel() - 1) : null);
         titlePath.addLast(heading.title());
         catalog.setDocumentGroupId(groupId);
         catalog.setDocType(docType.toUpperCase());
@@ -197,6 +209,7 @@ public class WordImportServiceImpl implements WordImportService {
     }
 
     private HeadingInfo parseHeading(RawParagraph paragraph, String text) {
+        Integer styleLevel = parseHeadingLevelByStyle(paragraph.getStyle());
         Integer styleLevel = parseHeadingLevelByStyle(paragraph.style());
     private HeadingInfo parseHeading(String style, String text) {
         Integer styleLevel = parseHeadingLevelByStyle(style);
@@ -222,6 +235,11 @@ public class WordImportServiceImpl implements WordImportService {
 
         Matcher bulletMatcher = BULLET_LEVEL_PATTERN.matcher(text);
         if (bulletMatcher.matches()) {
+            return new HeadingInfo(bulletMatcher.group(1), bulletMatcher.group(2), Math.max(paragraph.getLevelHint(), 3));
+        }
+
+        if (paragraph.getLevelHint() > 0 && isLikelyTitle(text)) {
+            return new HeadingInfo(String.valueOf(paragraph.getLevelHint()), text, paragraph.getLevelHint());
             return new HeadingInfo(bulletMatcher.group(1), bulletMatcher.group(2), Math.max(paragraph.levelHint(), 3));
         }
 
