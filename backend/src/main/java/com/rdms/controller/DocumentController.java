@@ -1,5 +1,6 @@
 package com.rdms.controller;
 
+import com.rdms.dto.CatalogContentNodeDto;
 import com.rdms.dto.ImportResponse;
 import com.rdms.dto.TraceGraphDto;
 import com.rdms.dto.TraceItemDto;
@@ -41,5 +42,11 @@ public class DocumentController {
     @GetMapping("/trace-graph")
     public TraceGraphDto traceGraph(@RequestParam("documentGroupId") String documentGroupId) {
         return traceService.buildTraceGraph(documentGroupId);
+    }
+
+    @GetMapping("/catalog-content-tree")
+    public List<CatalogContentNodeDto> catalogContentTree(@RequestParam("documentGroupId") String documentGroupId,
+                                                          @RequestParam("docType") String docType) {
+        return wordImportService.getCatalogContentTree(documentGroupId, docType);
     }
 }

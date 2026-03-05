@@ -40,6 +40,7 @@ npm run dev
   - 参数：`file`、`docType(REQUIREMENT|DESIGN|TESTCASE)`、`documentGroupId(可选)`
 - `GET /api/documents/trace-matrix?documentGroupId=xxx`
 - `GET /api/documents/trace-graph?documentGroupId=xxx`
+- `GET /api/documents/catalog-content-tree?documentGroupId=xxx&docType=REQUIREMENT|DESIGN|TESTCASE`
 
 ## 目录识别增强算法
 
@@ -54,3 +55,8 @@ npm run dev
 1. 先按目录编号精确匹配（score=100）。
 2. 再按目录编号前缀关系匹配（score=85）。
 3. 最后按标题最长公共子串相似度匹配（阈值 >= 50）。
+
+
+## 目录与内容关联
+
+目录与内容通过 `doc_content.catalog_id -> doc_catalog.id` 关联。可通过 `catalog-content-tree` 接口一次性获取目录树及每个目录节点对应正文内容。

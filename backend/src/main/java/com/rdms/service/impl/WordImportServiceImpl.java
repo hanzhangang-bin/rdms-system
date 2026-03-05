@@ -1,10 +1,15 @@
 package com.rdms.service.impl;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.toolkit.Db;
+import com.rdms.dto.CatalogContentNodeDto;
 import com.rdms.dto.ImportResponse;
 import com.rdms.entity.DocCatalog;
 import com.rdms.entity.DocContent;
+import com.rdms.mapper.DocCatalogMapper;
+import com.rdms.mapper.DocContentMapper;
 import com.rdms.service.WordImportService;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.poi.hwpf.HWPFDocument;
 import org.apache.poi.hwpf.extractor.WordExtractor;
@@ -31,6 +36,7 @@ import java.util.regex.Pattern;
 
 @Slf4j
 @Service
+@RequiredArgsConstructor
 public class WordImportServiceImpl implements WordImportService {
 
     private static final Set<String> SUPPORTED_EXTENSIONS = Set.of("doc", "docx", "wps");
@@ -43,6 +49,9 @@ public class WordImportServiceImpl implements WordImportService {
     private static final Pattern TOC_FIELD_PATTERN = Pattern.compile(
             "HYPERLINK\\s+\\\\l\\s+_Toc\\d+\\s+(.+?)\\s+PAGEREF\\s+_Toc\\d+", Pattern.CASE_INSENSITIVE);
     private static final Pattern TRAILING_PAGE_NO_PATTERN = Pattern.compile("^(.+?)\\s+(\\d{1,4})$");
+
+    private final DocCatalogMapper docCatalogMapper;
+    private final DocContentMapper docContentMapper;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -76,6 +85,55 @@ public class WordImportServiceImpl implements WordImportService {
                 .docType(normalizedDocType)
                 .catalogCount(context.getCatalogs().size())
                 .build();
+    }
+
+    @Override
+    public List<CatalogContentNodeDto> getCatalogContentTree(String documentGroupId, String docType) {
+        String normalizedDocType = normalizeDocType(docType);
+
+        List<DocCatalog> catalogs = docCatalogMapper.selectList(new LambdaQueryWrapper<DocCatalog>()
+                .eq(DocCatalog::getDocumentGroupId, documentGroupId)
+                .eq(DocCatalog::getDocType, normalizedDocType)
+                .orderByAsc(DocCatalog::getCatalogLevel)
+                .orderByAsc(DocCatalog::getId));
+
+        if (catalogs.isEmpty()) {
+            return List.of();
+        }
+
+        List<DocContent> contents = docContentMapper.selectList(new LambdaQueryWrapper<DocContent>()
+                .eq(DocContent::getDocumentGroupId, documentGroupId));
+
+        Map<Long, String> contentByCatalogId = new HashMap<>();
+        for (DocContent content : contents) {
+            contentByCatalogId.put(content.getCatalogId(), content.getContentText());
+        }
+
+        Map<Long, CatalogContentNodeDto> nodeById = new HashMap<>();
+        List<CatalogContentNodeDto> roots = new ArrayList<>();
+
+        for (DocCatalog catalog : catalogs) {
+            CatalogContentNodeDto node = CatalogContentNodeDto.builder()
+                    .catalogId(catalog.getId())
+                    .parentId(catalog.getParentId())
+                    .catalogNo(catalog.getCatalogNo())
+                    .title(catalog.getTitle())
+                    .catalogLevel(catalog.getCatalogLevel())
+                    .fullPath(catalog.getFullPath())
+                    .contentText(contentByCatalogId.get(catalog.getId()))
+                    .build();
+            nodeById.put(catalog.getId(), node);
+        }
+
+        for (DocCatalog catalog : catalogs) {
+            CatalogContentNodeDto node = nodeById.get(catalog.getId());
+            if (catalog.getParentId() == null || !nodeById.containsKey(catalog.getParentId())) {
+                roots.add(node);
+            } else {
+                nodeById.get(catalog.getParentId()).getChildren().add(node);
+            }
+        }
+        return roots;
     }
 
     private void processParagraph(ParseContext context, RawParagraph paragraph) {
