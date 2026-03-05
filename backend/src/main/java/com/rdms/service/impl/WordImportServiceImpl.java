@@ -306,6 +306,52 @@ public class WordImportServiceImpl implements WordImportService {
         return text == null ? "" : text.replace('\u00A0', ' ').trim();
     }
 
+    private static class HeadingInfo {
+        private final String catalogNo;
+        private final String title;
+        private final int level;
+
+        private HeadingInfo(String catalogNo, String title, int level) {
+            this.catalogNo = catalogNo;
+            this.title = title;
+            this.level = level;
+        }
+
+        private String catalogNo() {
+            return catalogNo;
+        }
+
+        private String title() {
+            return title;
+        }
+
+        private int level() {
+            return level;
+        }
+    }
+
+    private static class RawParagraph {
+        private final String style;
+        private final String text;
+        private final int levelHint;
+
+        private RawParagraph(String style, String text, int levelHint) {
+            this.style = style;
+            this.text = text;
+            this.levelHint = levelHint;
+        }
+
+        private String style() {
+            return style;
+        }
+
+        private String text() {
+            return text;
+        }
+
+        private int levelHint() {
+            return levelHint;
+        }
     private record HeadingInfo(String catalogNo, String title, int level) {
     }
 
