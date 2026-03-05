@@ -63,6 +63,7 @@ public class WordImportServiceImpl implements WordImportService {
                 }
 
                 HeadingInfo heading = parseHeading(paragraph, text);
+                HeadingInfo heading = parseHeading(paragraph.style(), text);
                 if (heading != null) {
                     while (titlePath.size() >= heading.level()) {
                         titlePath.pollLast();
@@ -124,6 +125,7 @@ public class WordImportServiceImpl implements WordImportService {
             return readDocParagraphs(bytes);
         }
         if ("wps".equals(ext)) {
+            // WPS 通常可保存为 OLE(doc) 或 OOXML(docx)，优先按 doc 尝试，失败再按 docx 尝试
             try {
                 return readDocParagraphs(bytes);
             } catch (Exception ignore) {
@@ -139,6 +141,7 @@ public class WordImportServiceImpl implements WordImportService {
             for (XWPFParagraph paragraph : document.getParagraphs()) {
                 int levelHint = parseLevelHint(paragraph);
                 result.add(new RawParagraph(paragraph.getStyle(), paragraph.getText(), levelHint));
+                result.add(new RawParagraph(paragraph.getStyle(), paragraph.getText()));
             }
         }
         return result;
@@ -163,6 +166,7 @@ public class WordImportServiceImpl implements WordImportService {
             List<RawParagraph> result = new ArrayList<>();
             for (String p : extractor.getParagraphText()) {
                 result.add(new RawParagraph(null, p, 0));
+                result.add(new RawParagraph(null, p));
             }
             return result;
         }
@@ -194,6 +198,8 @@ public class WordImportServiceImpl implements WordImportService {
 
     private HeadingInfo parseHeading(RawParagraph paragraph, String text) {
         Integer styleLevel = parseHeadingLevelByStyle(paragraph.style());
+    private HeadingInfo parseHeading(String style, String text) {
+        Integer styleLevel = parseHeadingLevelByStyle(style);
         if (styleLevel != null) {
             HeadingInfo byNo = parseByNumbering(text, styleLevel);
             return byNo != null ? byNo : new HeadingInfo(String.valueOf(styleLevel), text, styleLevel);
@@ -221,6 +227,7 @@ public class WordImportServiceImpl implements WordImportService {
 
         if (paragraph.levelHint() > 0 && isLikelyTitle(text)) {
             return new HeadingInfo(String.valueOf(paragraph.levelHint()), text, paragraph.levelHint());
+            return new HeadingInfo(bulletMatcher.group(1), bulletMatcher.group(2), 3);
         }
         return null;
     }
@@ -303,5 +310,6 @@ public class WordImportServiceImpl implements WordImportService {
     }
 
     private record RawParagraph(String style, String text, int levelHint) {
+    private record RawParagraph(String style, String text) {
     }
 }
