@@ -295,18 +295,16 @@ public class WordImportServiceImpl implements WordImportService {
     private String paragraphToHtml(XWPFParagraph paragraph) {
         StringBuilder inner = new StringBuilder();
         for (XWPFRun run : paragraph.getRuns()) {
-            if (run.text() != null) {
-                inner.append(escapeHtml(run.text()));
-            }
+            inner.append(runToHtml(run));
             for (XWPFPicture picture : run.getEmbeddedPictures()) {
                 XWPFPictureData pictureData = picture.getPictureData();
                 if (pictureData != null && pictureData.getData() != null) {
                     String mime = pictureData.getPackagePart() != null
                             ? pictureData.getPackagePart().getContentType() : "image/png";
                     String base64 = Base64.getEncoder().encodeToString(pictureData.getData());
-                    inner.append("<img src=\"")
+                    inner.append("<img src='")
                             .append("data:").append(mime).append(";base64,").append(base64)
-                            .append("\" alt=\"image\" />");
+                            .append("' alt='image' />");
                 }
             }
         }
@@ -317,12 +315,58 @@ public class WordImportServiceImpl implements WordImportService {
         return "<p>" + inner + "</p>";
     }
 
+    private String runToHtml(XWPFRun run) {
+        String text = run.text();
+        if (!StringUtils.hasText(text)) {
+            return "";
+        }
+
+        StringBuilder style = new StringBuilder();
+        if (StringUtils.hasText(run.getColor())) {
+            style.append("color:#").append(run.getColor()).append(";");
+        }
+        if (run.getFontSize() > 0) {
+            style.append("font-size:").append(run.getFontSize()).append("pt;");
+        }
+        if (StringUtils.hasText(run.getFontFamily())) {
+            style.append("font-family:").append(run.getFontFamily()).append(";");
+        }
+
+        String html = escapeHtml(text).replace("\n", "<br/>");
+        if (style.length() > 0) {
+            html = "<span style=\"" + style + "\">" + html + "</span>";
+        }
+        if (run.isBold()) {
+            html = "<strong>" + html + "</strong>";
+        }
+        if (run.isItalic()) {
+            html = "<em>" + html + "</em>";
+        }
+        if (run.getUnderline() != null && run.getUnderline().getValue() != 0) {
+            html = "<u>" + html + "</u>";
+        }
+        if (run.isStrikeThrough()) {
+            html = "<del>" + html + "</del>";
+        }
+        return html;
+    }
+
     private String tableToHtml(XWPFTable table) {
-        StringBuilder html = new StringBuilder("<table border=\"1\" style=\"border-collapse:collapse;\">");
+        StringBuilder html = new StringBuilder("<table border='1' style='border-collapse:collapse;'>");
         for (XWPFTableRow row : table.getRows()) {
             html.append("<tr>");
             for (XWPFTableCell cell : row.getTableCells()) {
-                html.append("<td>").append(escapeHtml(cell.getText())).append("</td>");
+                StringBuilder cellHtml = new StringBuilder();
+                for (XWPFParagraph p : cell.getParagraphs()) {
+                    String ph = paragraphToHtml(p);
+                    if (StringUtils.hasText(ph)) {
+                        cellHtml.append(ph);
+                    }
+                }
+                if (cellHtml.length() == 0) {
+                    cellHtml.append(escapeHtml(cell.getText()));
+                }
+                html.append("<td>").append(cellHtml).append("</td>");
             }
             html.append("</tr>");
         }
