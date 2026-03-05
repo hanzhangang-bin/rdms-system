@@ -58,6 +58,7 @@ public class WordImportServiceImpl implements WordImportService {
             List<RawParagraph> paragraphs = readParagraphs(file);
             for (RawParagraph paragraph : paragraphs) {
                 String text = cleanText(paragraph.getText());
+                String text = cleanText(paragraph.text());
                 if (text.isEmpty()) {
                     continue;
                 }
@@ -65,6 +66,9 @@ public class WordImportServiceImpl implements WordImportService {
                 HeadingInfo heading = parseHeading(paragraph, text);
                 if (heading != null) {
                     while (titlePath.size() >= heading.getLevel()) {
+                HeadingInfo heading = parseHeading(paragraph.style(), text);
+                if (heading != null) {
+                    while (titlePath.size() >= heading.level()) {
                         titlePath.pollLast();
                     }
                     DocCatalog catalog = buildCatalog(groupId, docType, heading, latestCatalogByLevel, titlePath);
@@ -72,6 +76,8 @@ public class WordImportServiceImpl implements WordImportService {
                     catalogs.add(catalog);
                     latestCatalogByLevel.put(heading.getLevel(), catalog.getId());
                     clearDeeperLevels(latestCatalogByLevel, heading.getLevel());
+                    latestCatalogByLevel.put(heading.level(), catalog.getId());
+                    clearDeeperLevels(latestCatalogByLevel, heading.level());
 
                     currentCatalogId = catalog.getId();
                     contentMap.putIfAbsent(currentCatalogId, new StringBuilder());
@@ -124,6 +130,7 @@ public class WordImportServiceImpl implements WordImportService {
             return readDocParagraphs(bytes);
         }
         if ("wps".equals(ext)) {
+            // WPS 通常可保存为 OLE(doc) 或 OOXML(docx)，优先按 doc 尝试，失败再按 docx 尝试
             try {
                 return readDocParagraphs(bytes);
             } catch (Exception ignore) {
@@ -139,6 +146,7 @@ public class WordImportServiceImpl implements WordImportService {
             for (XWPFParagraph paragraph : document.getParagraphs()) {
                 int levelHint = parseLevelHint(paragraph);
                 result.add(new RawParagraph(paragraph.getStyle(), paragraph.getText(), levelHint));
+                result.add(new RawParagraph(paragraph.getStyle(), paragraph.getText()));
             }
         }
         return result;
@@ -163,6 +171,7 @@ public class WordImportServiceImpl implements WordImportService {
             List<RawParagraph> result = new ArrayList<>();
             for (String p : extractor.getParagraphText()) {
                 result.add(new RawParagraph(null, p, 0));
+                result.add(new RawParagraph(null, p));
             }
             return result;
         }
@@ -188,12 +197,22 @@ public class WordImportServiceImpl implements WordImportService {
         catalog.setTitle(heading.getTitle());
         catalog.setCatalogLevel(heading.getLevel());
         catalog.setParentId(heading.getLevel() > 1 ? latestCatalogByLevel.get(heading.getLevel() - 1) : null);
+        titlePath.addLast(heading.title());
+        catalog.setDocumentGroupId(groupId);
+        catalog.setDocType(docType.toUpperCase());
+        catalog.setCatalogNo(heading.catalogNo());
+        catalog.setTitle(heading.title());
+        catalog.setCatalogLevel(heading.level());
+        catalog.setParentId(heading.level() > 1 ? latestCatalogByLevel.get(heading.level() - 1) : null);
         catalog.setFullPath(String.join(" / ", titlePath));
         return catalog;
     }
 
     private HeadingInfo parseHeading(RawParagraph paragraph, String text) {
         Integer styleLevel = parseHeadingLevelByStyle(paragraph.getStyle());
+        Integer styleLevel = parseHeadingLevelByStyle(paragraph.style());
+    private HeadingInfo parseHeading(String style, String text) {
+        Integer styleLevel = parseHeadingLevelByStyle(style);
         if (styleLevel != null) {
             HeadingInfo byNo = parseByNumbering(text, styleLevel);
             return byNo != null ? byNo : new HeadingInfo(String.valueOf(styleLevel), text, styleLevel);
@@ -221,6 +240,12 @@ public class WordImportServiceImpl implements WordImportService {
 
         if (paragraph.getLevelHint() > 0 && isLikelyTitle(text)) {
             return new HeadingInfo(String.valueOf(paragraph.getLevelHint()), text, paragraph.getLevelHint());
+            return new HeadingInfo(bulletMatcher.group(1), bulletMatcher.group(2), Math.max(paragraph.levelHint(), 3));
+        }
+
+        if (paragraph.levelHint() > 0 && isLikelyTitle(text)) {
+            return new HeadingInfo(String.valueOf(paragraph.levelHint()), text, paragraph.levelHint());
+            return new HeadingInfo(bulletMatcher.group(1), bulletMatcher.group(2), 3);
         }
         return null;
     }
@@ -297,5 +322,58 @@ public class WordImportServiceImpl implements WordImportService {
 
     private String cleanText(String text) {
         return text == null ? "" : text.replace('\u00A0', ' ').trim();
+    }
+
+    private static class HeadingInfo {
+        private final String catalogNo;
+        private final String title;
+        private final int level;
+
+        private HeadingInfo(String catalogNo, String title, int level) {
+            this.catalogNo = catalogNo;
+            this.title = title;
+            this.level = level;
+        }
+
+        private String catalogNo() {
+            return catalogNo;
+        }
+
+        private String title() {
+            return title;
+        }
+
+        private int level() {
+            return level;
+        }
+    }
+
+    private static class RawParagraph {
+        private final String style;
+        private final String text;
+        private final int levelHint;
+
+        private RawParagraph(String style, String text, int levelHint) {
+            this.style = style;
+            this.text = text;
+            this.levelHint = levelHint;
+        }
+
+        private String style() {
+            return style;
+        }
+
+        private String text() {
+            return text;
+        }
+
+        private int levelHint() {
+            return levelHint;
+        }
+    private record HeadingInfo(String catalogNo, String title, int level) {
+    }
+
+    private record RawParagraph(String style, String text, int levelHint) {
+    private record RawParagraph(String style, String text) {
     }
 }
