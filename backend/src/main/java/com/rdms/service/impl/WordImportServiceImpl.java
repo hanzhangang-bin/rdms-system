@@ -494,6 +494,9 @@ public class WordImportServiceImpl implements WordImportService {
         }
         String number = matcher.group(1);
         String title = matcher.group(2);
+        if (!isLikelyStructuredHeading(title)) {
+            return null;
+        }
         int level = number.split("\\.").length;
         return new HeadingInfo(number, title, level);
     }
@@ -517,6 +520,9 @@ public class WordImportServiceImpl implements WordImportService {
         }
         String no = "第" + matcher.group(1) + matcher.group(2);
         String title = matcher.group(3);
+        if (!isLikelyStructuredHeading(title)) {
+            return null;
+        }
         int level = "章".equals(matcher.group(2)) ? 1 : 2;
         return new HeadingInfo(no, title, level);
     }
