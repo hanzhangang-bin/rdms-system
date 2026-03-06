@@ -37,10 +37,13 @@ npm run dev
 ## 核心接口
 
 - `POST /api/documents/import`
-  - 参数：`file`、`docType(REQUIREMENT|DESIGN|TESTCASE)`、`documentGroupId(可选)`
+  - 参数：`file`、`docType(REQUIREMENT|DESIGN|TESTCASE)`、`documentGroupId(可选)`、`versionNo(可选)`
+- `GET /api/documents/versions?documentGroupId=xxx&docType=REQUIREMENT|DESIGN|TESTCASE`
 - `GET /api/documents/trace-matrix?documentGroupId=xxx`
+- `POST /api/documents/trace-matrix/manual-adjust`
 - `GET /api/documents/trace-graph?documentGroupId=xxx`
-- `GET /api/documents/catalog-content-tree?documentGroupId=xxx&docType=REQUIREMENT|DESIGN|TESTCASE`
+- `GET /api/documents/catalog-content-tree?documentGroupId=xxx&docType=REQUIREMENT|DESIGN|TESTCASE&versionNo=可选`
+- `POST /api/documents/catalog-content/update`
 
 ## 目录识别增强算法
 
@@ -70,3 +73,9 @@ npm run dev
 - 图片转 `<img src="data:*;base64,...">`
 
 这样目录节点与对应内容不仅可关联，还能保留图片、表格等格式。
+
+## 新增能力
+
+- 文档版本管理：导入时可指定版本号，不指定则自动生成；同一 `documentGroupId + docType` 始终标记一个最新版本。
+- 目录和目录内容编辑：支持基于 `catalogId` 修改目录标题与对应 HTML 内容。
+- 追踪矩阵手工调整：矩阵以表格展示，并支持逐行手动修改设计/测试关联后保存。

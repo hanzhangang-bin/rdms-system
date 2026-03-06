@@ -5,11 +5,18 @@ import com.rdms.dto.TraceGraphDto;
 import com.rdms.dto.TraceGraphEdgeDto;
 import com.rdms.dto.TraceGraphNodeDto;
 import com.rdms.dto.TraceItemDto;
+import com.rdms.dto.TraceManualAdjustRequest;
 import com.rdms.entity.DocCatalog;
+import com.rdms.entity.DocumentVersion;
+import com.rdms.entity.TraceMatrixManual;
 import com.rdms.mapper.DocCatalogMapper;
+import com.rdms.mapper.DocumentVersionMapper;
+import com.rdms.mapper.TraceMatrixManualMapper;
 import com.rdms.service.TraceService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -31,23 +38,30 @@ public class TraceServiceImpl implements TraceService {
     private static final String TYPE_TESTCASE = "TESTCASE";
 
     private final DocCatalogMapper docCatalogMapper;
+    private final DocumentVersionMapper documentVersionMapper;
+    private final TraceMatrixManualMapper traceMatrixManualMapper;
 
     @Override
     public List<TraceItemDto> buildTraceMatrix(String documentGroupId) {
         CatalogContext context = loadContext(documentGroupId);
+        Map<String, TraceMatrixManual> manualMap = loadManualMap(documentGroupId);
 
         List<TraceItemDto> result = new ArrayList<>();
         for (DocCatalog req : context.requirements()) {
             MatchResult design = findMatched(req, context.designs().values());
             MatchResult testcase = findMatched(req, context.tests().values());
-            result.add(TraceItemDto.builder()
+
+            TraceItemDto row = TraceItemDto.builder()
                     .requirementCatalog(req.getCatalogNo())
                     .requirementTitle(req.getTitle())
                     .designCatalog(design.catalog() == null ? null : design.catalog().getCatalogNo())
                     .designTitle(design.catalog() == null ? null : design.catalog().getTitle())
                     .testCatalog(testcase.catalog() == null ? null : testcase.catalog().getCatalogNo())
                     .testTitle(testcase.catalog() == null ? null : testcase.catalog().getTitle())
-                    .build());
+                    .build();
+
+            applyManualAdjust(row, context, manualMap.get(req.getCatalogNo()));
+            result.add(row);
         }
 
         return result.stream()
@@ -94,9 +108,44 @@ public class TraceServiceImpl implements TraceService {
                 .build();
     }
 
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void saveManualAdjust(TraceManualAdjustRequest request) {
+        if (request == null || !StringUtils.hasText(request.getDocumentGroupId())
+                || !StringUtils.hasText(request.getRequirementCatalog())) {
+            throw new IllegalArgumentException("documentGroupId和requirementCatalog不能为空");
+        }
+
+        TraceMatrixManual manual = traceMatrixManualMapper.selectOne(new LambdaQueryWrapper<TraceMatrixManual>()
+                .eq(TraceMatrixManual::getDocumentGroupId, request.getDocumentGroupId())
+                .eq(TraceMatrixManual::getRequirementCatalog, request.getRequirementCatalog().trim())
+                .last("limit 1"));
+
+        if (manual == null) {
+            manual = new TraceMatrixManual();
+            manual.setDocumentGroupId(request.getDocumentGroupId().trim());
+            manual.setRequirementCatalog(request.getRequirementCatalog().trim());
+        }
+
+        manual.setDesignCatalog(trimToNull(request.getDesignCatalog()));
+        manual.setTestCatalog(trimToNull(request.getTestCatalog()));
+
+        if (manual.getId() == null) {
+            traceMatrixManualMapper.insert(manual);
+        } else {
+            traceMatrixManualMapper.updateById(manual);
+        }
+    }
+
     private CatalogContext loadContext(String documentGroupId) {
-        List<DocCatalog> allCatalog = docCatalogMapper.selectList(new LambdaQueryWrapper<DocCatalog>()
-                .eq(DocCatalog::getDocumentGroupId, documentGroupId));
+        String reqVersion = resolveLatestVersion(documentGroupId, TYPE_REQUIREMENT);
+        String designVersion = resolveLatestVersion(documentGroupId, TYPE_DESIGN);
+        String testVersion = resolveLatestVersion(documentGroupId, TYPE_TESTCASE);
+
+        List<DocCatalog> allCatalog = new ArrayList<>();
+        allCatalog.addAll(loadCatalogByTypeAndVersion(documentGroupId, TYPE_REQUIREMENT, reqVersion));
+        allCatalog.addAll(loadCatalogByTypeAndVersion(documentGroupId, TYPE_DESIGN, designVersion));
+        allCatalog.addAll(loadCatalogByTypeAndVersion(documentGroupId, TYPE_TESTCASE, testVersion));
 
         Map<String, List<DocCatalog>> catalogByType = allCatalog.stream()
                 .collect(Collectors.groupingBy(DocCatalog::getDocType));
@@ -107,6 +156,47 @@ public class TraceServiceImpl implements TraceService {
         Map<String, DocCatalog> testsByNo = catalogByType.getOrDefault(TYPE_TESTCASE, List.of())
                 .stream().collect(Collectors.toMap(DocCatalog::getCatalogNo, Function.identity(), (a, b) -> a));
         return new CatalogContext(requirements, designsByNo, testsByNo);
+    }
+
+    private List<DocCatalog> loadCatalogByTypeAndVersion(String documentGroupId, String docType, String versionNo) {
+        LambdaQueryWrapper<DocCatalog> query = new LambdaQueryWrapper<DocCatalog>()
+                .eq(DocCatalog::getDocumentGroupId, documentGroupId)
+                .eq(DocCatalog::getDocType, docType);
+        if (StringUtils.hasText(versionNo)) {
+            query.eq(DocCatalog::getVersionNo, versionNo);
+        }
+        return docCatalogMapper.selectList(query);
+    }
+
+    private String resolveLatestVersion(String documentGroupId, String docType) {
+        DocumentVersion latest = documentVersionMapper.selectOne(new LambdaQueryWrapper<DocumentVersion>()
+                .eq(DocumentVersion::getDocumentGroupId, documentGroupId)
+                .eq(DocumentVersion::getDocType, docType)
+                .eq(DocumentVersion::getIsLatest, 1)
+                .orderByDesc(DocumentVersion::getCreatedAt)
+                .last("limit 1"));
+        return latest == null ? null : latest.getVersionNo();
+    }
+
+    private Map<String, TraceMatrixManual> loadManualMap(String documentGroupId) {
+        return traceMatrixManualMapper.selectList(new LambdaQueryWrapper<TraceMatrixManual>()
+                        .eq(TraceMatrixManual::getDocumentGroupId, documentGroupId))
+                .stream()
+                .collect(Collectors.toMap(TraceMatrixManual::getRequirementCatalog, Function.identity(), (a, b) -> b));
+    }
+
+    private void applyManualAdjust(TraceItemDto row, CatalogContext context, TraceMatrixManual manual) {
+        if (manual == null) {
+            return;
+        }
+
+        row.setDesignCatalog(manual.getDesignCatalog());
+        DocCatalog design = context.designs().get(manual.getDesignCatalog());
+        row.setDesignTitle(design == null ? null : design.getTitle());
+
+        row.setTestCatalog(manual.getTestCatalog());
+        DocCatalog test = context.tests().get(manual.getTestCatalog());
+        row.setTestTitle(test == null ? null : test.getTitle());
     }
 
     private TraceGraphNodeDto toNode(String type, DocCatalog catalog) {
@@ -175,6 +265,13 @@ public class TraceServiceImpl implements TraceService {
             }
         }
         return max;
+    }
+
+    private String trimToNull(String text) {
+        if (!StringUtils.hasText(text)) {
+            return null;
+        }
+        return text.trim();
     }
 
     private record CatalogContext(List<DocCatalog> requirements, Map<String, DocCatalog> designs, Map<String, DocCatalog> tests) {

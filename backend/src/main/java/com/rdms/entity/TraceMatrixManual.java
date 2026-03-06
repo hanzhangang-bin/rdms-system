@@ -6,25 +6,17 @@ import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
 
 @Data
-@TableName("doc_catalog")
-public class DocCatalog {
+@TableName("trace_matrix_manual")
+public class TraceMatrixManual {
 
     @TableId(type = IdType.AUTO)
     private Long id;
 
     private String documentGroupId;
 
-    private String versionNo;
+    private String requirementCatalog;
 
-    private String docType;
+    private String designCatalog;
 
-    private String catalogNo;
-
-    private String title;
-
-    private Integer catalogLevel;
-
-    private Long parentId;
-
-    private String fullPath;
+    private String testCatalog;
 }

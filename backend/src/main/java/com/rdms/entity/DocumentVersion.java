@@ -5,26 +5,22 @@ import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
 
+import java.time.LocalDateTime;
+
 @Data
-@TableName("doc_catalog")
-public class DocCatalog {
+@TableName("doc_version")
+public class DocumentVersion {
 
     @TableId(type = IdType.AUTO)
     private Long id;
 
     private String documentGroupId;
 
-    private String versionNo;
-
     private String docType;
 
-    private String catalogNo;
+    private String versionNo;
 
-    private String title;
+    private Integer isLatest;
 
-    private Integer catalogLevel;
-
-    private Long parentId;
-
-    private String fullPath;
+    private LocalDateTime createdAt;
 }

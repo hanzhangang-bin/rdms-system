@@ -6,8 +6,10 @@ import com.rdms.dto.CatalogContentNodeDto;
 import com.rdms.dto.ImportResponse;
 import com.rdms.entity.DocCatalog;
 import com.rdms.entity.DocContent;
+import com.rdms.entity.DocumentVersion;
 import com.rdms.mapper.DocCatalogMapper;
 import com.rdms.mapper.DocContentMapper;
+import com.rdms.mapper.DocumentVersionMapper;
 import com.rdms.service.WordImportService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -41,6 +43,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.time.LocalDateTime;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -63,10 +66,11 @@ public class WordImportServiceImpl implements WordImportService {
 
     private final DocCatalogMapper docCatalogMapper;
     private final DocContentMapper docContentMapper;
+    private final DocumentVersionMapper documentVersionMapper;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public ImportResponse importWord(MultipartFile file, String documentGroupId, String docType) {
+    public ImportResponse importWord(MultipartFile file, String documentGroupId, String docType, String versionNo) {
         if (file == null || file.isEmpty()) {
             throw new IllegalArgumentException("上传文件不能为空");
         }
@@ -74,8 +78,10 @@ public class WordImportServiceImpl implements WordImportService {
         String normalizedDocType = normalizeDocType(docType);
         String extension = validateAndGetExtension(file.getOriginalFilename());
         String groupId = StringUtils.hasText(documentGroupId) ? documentGroupId : UUID.randomUUID().toString();
+        String normalizedVersionNo = StringUtils.hasText(versionNo) ? versionNo.trim() : generateVersionNo();
 
-        ParseContext context = new ParseContext(groupId, normalizedDocType);
+        markLatestVersion(groupId, normalizedDocType, normalizedVersionNo);
+        ParseContext context = new ParseContext(groupId, normalizedDocType, normalizedVersionNo);
 
         try {
             List<RawParagraph> paragraphs = readParagraphs(file.getBytes(), extension);
@@ -96,16 +102,20 @@ public class WordImportServiceImpl implements WordImportService {
                 .documentGroupId(groupId)
                 .docType(normalizedDocType)
                 .catalogCount(context.getCatalogs().size())
+                .versionNo(normalizedVersionNo)
                 .build();
     }
 
     @Override
-    public List<CatalogContentNodeDto> getCatalogContentTree(String documentGroupId, String docType) {
+    public List<CatalogContentNodeDto> getCatalogContentTree(String documentGroupId, String docType, String versionNo) {
         String normalizedDocType = normalizeDocType(docType);
+
+        String normalizedVersionNo = resolveVersionNo(documentGroupId, normalizedDocType, versionNo);
 
         List<DocCatalog> catalogs = docCatalogMapper.selectList(new LambdaQueryWrapper<DocCatalog>()
                 .eq(DocCatalog::getDocumentGroupId, documentGroupId)
                 .eq(DocCatalog::getDocType, normalizedDocType)
+                .eq(DocCatalog::getVersionNo, normalizedVersionNo)
                 .orderByAsc(DocCatalog::getCatalogLevel)
                 .orderByAsc(DocCatalog::getId));
 
@@ -114,7 +124,8 @@ public class WordImportServiceImpl implements WordImportService {
         }
 
         List<DocContent> contents = docContentMapper.selectList(new LambdaQueryWrapper<DocContent>()
-                .eq(DocContent::getDocumentGroupId, documentGroupId));
+                .eq(DocContent::getDocumentGroupId, documentGroupId)
+                .eq(DocContent::getVersionNo, normalizedVersionNo));
 
         Map<Long, String> contentByCatalogId = new HashMap<>();
         for (DocContent content : contents) {
@@ -167,6 +178,7 @@ public class WordImportServiceImpl implements WordImportService {
 
             DocCatalog catalog = new DocCatalog();
             catalog.setDocumentGroupId(context.getGroupId());
+            catalog.setVersionNo(context.getVersionNo());
             catalog.setDocType(context.getDocType());
             catalog.setCatalogNo(heading.getCatalogNo());
             catalog.setTitle(heading.getTitle());
@@ -182,6 +194,7 @@ public class WordImportServiceImpl implements WordImportService {
             DocContent content = new DocContent();
             content.setCatalogId(catalog.getId());
             content.setDocumentGroupId(context.getGroupId());
+            content.setVersionNo(context.getVersionNo());
             content.setContentText("");
             context.getContents().add(content);
             context.setCurrentContent(content);
@@ -561,18 +574,119 @@ public class WordImportServiceImpl implements WordImportService {
                 .replace("'", "&#39;");
     }
 
+
+    @Override
+    public List<com.rdms.dto.DocumentVersionDto> listVersions(String documentGroupId, String docType) {
+        String normalizedDocType = normalizeDocType(docType);
+        return documentVersionMapper.selectList(new LambdaQueryWrapper<DocumentVersion>()
+                        .eq(DocumentVersion::getDocumentGroupId, documentGroupId)
+                        .eq(DocumentVersion::getDocType, normalizedDocType)
+                        .orderByDesc(DocumentVersion::getCreatedAt))
+                .stream()
+                .map(v -> com.rdms.dto.DocumentVersionDto.builder()
+                        .id(v.getId())
+                        .documentGroupId(v.getDocumentGroupId())
+                        .docType(v.getDocType())
+                        .versionNo(v.getVersionNo())
+                        .isLatest(v.getIsLatest())
+                        .createdAt(v.getCreatedAt())
+                        .build())
+                .toList();
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void updateCatalogAndContent(com.rdms.dto.CatalogContentUpdateRequest request) {
+        if (request == null || request.getCatalogId() == null) {
+            throw new IllegalArgumentException("catalogId不能为空");
+        }
+        DocCatalog catalog = docCatalogMapper.selectById(request.getCatalogId());
+        if (catalog == null) {
+            throw new IllegalArgumentException("目录不存在");
+        }
+        if (StringUtils.hasText(request.getTitle())) {
+            catalog.setTitle(request.getTitle().trim());
+            docCatalogMapper.updateById(catalog);
+        }
+
+        DocContent content = docContentMapper.selectOne(new LambdaQueryWrapper<DocContent>()
+                .eq(DocContent::getCatalogId, request.getCatalogId())
+                .last("limit 1"));
+        if (content == null) {
+            content = new DocContent();
+            content.setCatalogId(request.getCatalogId());
+            content.setDocumentGroupId(catalog.getDocumentGroupId());
+            content.setVersionNo(catalog.getVersionNo());
+        }
+        if (request.getContentHtml() != null) {
+            content.setContentText(request.getContentHtml());
+        }
+        if (content.getId() == null) {
+            docContentMapper.insert(content);
+        } else {
+            docContentMapper.updateById(content);
+        }
+    }
+
+    private void markLatestVersion(String groupId, String docType, String versionNo) {
+        List<DocumentVersion> exists = documentVersionMapper.selectList(new LambdaQueryWrapper<DocumentVersion>()
+                .eq(DocumentVersion::getDocumentGroupId, groupId)
+                .eq(DocumentVersion::getDocType, docType));
+        for (DocumentVersion item : exists) {
+            item.setIsLatest(0);
+            documentVersionMapper.updateById(item);
+        }
+
+        DocumentVersion version = documentVersionMapper.selectOne(new LambdaQueryWrapper<DocumentVersion>()
+                .eq(DocumentVersion::getDocumentGroupId, groupId)
+                .eq(DocumentVersion::getDocType, docType)
+                .eq(DocumentVersion::getVersionNo, versionNo)
+                .last("limit 1"));
+        if (version == null) {
+            version = new DocumentVersion();
+            version.setDocumentGroupId(groupId);
+            version.setDocType(docType);
+            version.setVersionNo(versionNo);
+            version.setCreatedAt(LocalDateTime.now());
+            version.setIsLatest(1);
+            documentVersionMapper.insert(version);
+        } else {
+            version.setIsLatest(1);
+            documentVersionMapper.updateById(version);
+        }
+    }
+
+    private String resolveVersionNo(String groupId, String docType, String versionNo) {
+        if (StringUtils.hasText(versionNo)) {
+            return versionNo.trim();
+        }
+        DocumentVersion latest = documentVersionMapper.selectOne(new LambdaQueryWrapper<DocumentVersion>()
+                .eq(DocumentVersion::getDocumentGroupId, groupId)
+                .eq(DocumentVersion::getDocType, docType)
+                .eq(DocumentVersion::getIsLatest, 1)
+                .orderByDesc(DocumentVersion::getCreatedAt)
+                .last("limit 1"));
+        return latest == null ? "v1" : latest.getVersionNo();
+    }
+
+    private String generateVersionNo() {
+        return "v" + System.currentTimeMillis();
+    }
+
     private static class ParseContext {
         private final String groupId;
         private final String docType;
+        private final String versionNo;
         private final List<DocCatalog> catalogs = new ArrayList<>();
         private final List<DocContent> contents = new ArrayList<>();
         private final Map<Integer, Long> latestCatalogByLevel = new HashMap<>();
         private final Deque<String> titlePath = new ArrayDeque<>();
         private DocContent currentContent;
 
-        private ParseContext(String groupId, String docType) {
+        private ParseContext(String groupId, String docType, String versionNo) {
             this.groupId = groupId;
             this.docType = docType;
+            this.versionNo = versionNo;
         }
 
         private String getGroupId() {
@@ -581,6 +695,10 @@ public class WordImportServiceImpl implements WordImportService {
 
         private String getDocType() {
             return docType;
+        }
+
+        private String getVersionNo() {
+            return versionNo;
         }
 
         private List<DocCatalog> getCatalogs() {

@@ -90,3 +90,5 @@ body {
   inset: 0;
   pointer-events: none;
 }
+.mb8 { margin-bottom: 8px; }
+.mt8 { margin-top: 8px; }

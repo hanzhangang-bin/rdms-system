@@ -16,5 +16,7 @@ public class DocContent {
 
     private String documentGroupId;
 
+    private String versionNo;
+
     private String contentText;
 }
