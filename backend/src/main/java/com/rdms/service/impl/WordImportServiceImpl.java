@@ -22,6 +22,7 @@ import org.apache.poi.xwpf.usermodel.XWPFParagraph;
 import org.apache.poi.xwpf.usermodel.XWPFPicture;
 import org.apache.poi.xwpf.usermodel.XWPFPictureData;
 import org.apache.poi.xwpf.usermodel.XWPFRun;
+import org.apache.poi.xwpf.usermodel.XWPFStyle;
 import org.apache.poi.xwpf.usermodel.XWPFTable;
 import org.apache.poi.xwpf.usermodel.XWPFTableCell;
 import org.apache.poi.xwpf.usermodel.XWPFTableRow;
@@ -295,7 +296,7 @@ public class WordImportServiceImpl implements WordImportService {
                 if (bodyElement.getElementType() == BodyElementType.PARAGRAPH) {
                     XWPFParagraph paragraph = (XWPFParagraph) bodyElement;
                     int levelHint = parseLevelHint(paragraph);
-                    result.add(new RawParagraph(paragraph.getStyle(), paragraph.getText(), levelHint, paragraphToHtml(paragraph)));
+                    result.add(new RawParagraph(resolveParagraphStyle(paragraph, document), paragraph.getText(), levelHint, paragraphToHtml(paragraph)));
                 } else if (bodyElement.getElementType() == BodyElementType.TABLE) {
                     XWPFTable table = (XWPFTable) bodyElement;
                     result.add(new RawParagraph(null, table.getText(), 0, tableToHtml(table)));
@@ -303,6 +304,18 @@ public class WordImportServiceImpl implements WordImportService {
             }
         }
         return result;
+    }
+
+    private String resolveParagraphStyle(XWPFParagraph paragraph, XWPFDocument document) {
+        String styleId = paragraph.getStyle();
+        if (!StringUtils.hasText(styleId) || document.getStyles() == null) {
+            return styleId;
+        }
+        XWPFStyle style = document.getStyles().getStyle(styleId);
+        if (style == null || !StringUtils.hasText(style.getName())) {
+            return styleId;
+        }
+        return styleId + "|" + style.getName();
     }
 
     private String paragraphToHtml(XWPFParagraph paragraph) {
@@ -438,7 +451,7 @@ public class WordImportServiceImpl implements WordImportService {
         }
 
         Matcher bulletMatcher = BULLET_LEVEL_PATTERN.matcher(headingText);
-        if (bulletMatcher.matches()) {
+        if (bulletMatcher.matches() && isLikelyStructuredHeading(bulletMatcher.group(2))) {
             return new HeadingInfo(bulletMatcher.group(1), bulletMatcher.group(2), Math.max(paragraph.getLevelHint(), 3));
         }
 
@@ -490,7 +503,11 @@ public class WordImportServiceImpl implements WordImportService {
         if (!matcher.matches()) {
             return null;
         }
-        return new HeadingInfo(matcher.group(1), matcher.group(2), 1);
+        String title = matcher.group(2);
+        if (!isLikelyStructuredHeading(title)) {
+            return null;
+        }
+        return new HeadingInfo(matcher.group(1), title, 1);
     }
 
     private HeadingInfo parseByChineseSection(String text) {
@@ -509,23 +526,36 @@ public class WordImportServiceImpl implements WordImportService {
         if (!matcher.matches()) {
             return null;
         }
-        return new HeadingInfo(matcher.group(1), matcher.group(2), 2);
+        String title = matcher.group(2);
+        if (!isLikelyStructuredHeading(title)) {
+            return null;
+        }
+        return new HeadingInfo(matcher.group(1), title, 2);
     }
 
     private Integer parseHeadingLevelByStyle(String style) {
         if (!StringUtils.hasText(style)) {
             return null;
         }
-        String normalized = style.toLowerCase();
-        if (normalized.startsWith("heading")) {
-            String digits = normalized.replaceAll("\\D", "");
-            return digits.isEmpty() ? 1 : Integer.parseInt(digits);
-        }
-        if (normalized.startsWith("标题")) {
-            String digits = normalized.replaceAll("\\D", "");
-            return digits.isEmpty() ? 1 : Integer.parseInt(digits);
+
+        for (String candidate : style.split("\\|")) {
+            String normalized = candidate.toLowerCase().trim();
+            if (normalized.startsWith("heading") || normalized.startsWith("标题")) {
+                String digits = normalized.replaceAll("\\D", "");
+                return digits.isEmpty() ? 1 : Integer.parseInt(digits);
+            }
         }
         return null;
+    }
+
+    private boolean isLikelyStructuredHeading(String title) {
+        if (!isLikelyTitle(title)) {
+            return false;
+        }
+        if (title.length() > 40) {
+            return false;
+        }
+        return !title.matches(".*[，,。；;！？?!].*");
     }
 
     private boolean isLikelyTitle(String text) {
