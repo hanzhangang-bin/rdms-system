@@ -22,6 +22,7 @@ import org.apache.poi.xwpf.usermodel.XWPFParagraph;
 import org.apache.poi.xwpf.usermodel.XWPFPicture;
 import org.apache.poi.xwpf.usermodel.XWPFPictureData;
 import org.apache.poi.xwpf.usermodel.XWPFRun;
+import org.apache.poi.xwpf.usermodel.XWPFStyle;
 import org.apache.poi.xwpf.usermodel.XWPFTable;
 import org.apache.poi.xwpf.usermodel.XWPFTableCell;
 import org.apache.poi.xwpf.usermodel.XWPFTableRow;
@@ -295,7 +296,7 @@ public class WordImportServiceImpl implements WordImportService {
                 if (bodyElement.getElementType() == BodyElementType.PARAGRAPH) {
                     XWPFParagraph paragraph = (XWPFParagraph) bodyElement;
                     int levelHint = parseLevelHint(paragraph);
-                    result.add(new RawParagraph(paragraph.getStyle(), paragraph.getText(), levelHint, paragraphToHtml(paragraph)));
+                    result.add(new RawParagraph(resolveParagraphStyle(paragraph, document), paragraph.getText(), levelHint, paragraphToHtml(paragraph)));
                 } else if (bodyElement.getElementType() == BodyElementType.TABLE) {
                     XWPFTable table = (XWPFTable) bodyElement;
                     result.add(new RawParagraph(null, table.getText(), 0, tableToHtml(table)));
@@ -303,6 +304,18 @@ public class WordImportServiceImpl implements WordImportService {
             }
         }
         return result;
+    }
+
+    private String resolveParagraphStyle(XWPFParagraph paragraph, XWPFDocument document) {
+        String styleId = paragraph.getStyle();
+        if (!StringUtils.hasText(styleId) || document.getStyles() == null) {
+            return styleId;
+        }
+        XWPFStyle style = document.getStyles().getStyle(styleId);
+        if (style == null || !StringUtils.hasText(style.getName())) {
+            return styleId;
+        }
+        return styleId + "|" + style.getName();
     }
 
     private String paragraphToHtml(XWPFParagraph paragraph) {
@@ -516,14 +529,13 @@ public class WordImportServiceImpl implements WordImportService {
         if (!StringUtils.hasText(style)) {
             return null;
         }
-        String normalized = style.toLowerCase();
-        if (normalized.startsWith("heading")) {
-            String digits = normalized.replaceAll("\\D", "");
-            return digits.isEmpty() ? 1 : Integer.parseInt(digits);
-        }
-        if (normalized.startsWith("标题")) {
-            String digits = normalized.replaceAll("\\D", "");
-            return digits.isEmpty() ? 1 : Integer.parseInt(digits);
+
+        for (String candidate : style.split("\\|")) {
+            String normalized = candidate.toLowerCase().trim();
+            if (normalized.startsWith("heading") || normalized.startsWith("标题")) {
+                String digits = normalized.replaceAll("\\D", "");
+                return digits.isEmpty() ? 1 : Integer.parseInt(digits);
+            }
         }
         return null;
     }
