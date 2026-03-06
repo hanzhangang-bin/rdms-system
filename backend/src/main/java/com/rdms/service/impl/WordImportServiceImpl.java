@@ -451,7 +451,7 @@ public class WordImportServiceImpl implements WordImportService {
         }
 
         Matcher bulletMatcher = BULLET_LEVEL_PATTERN.matcher(headingText);
-        if (bulletMatcher.matches()) {
+        if (bulletMatcher.matches() && isLikelyStructuredHeading(bulletMatcher.group(2))) {
             return new HeadingInfo(bulletMatcher.group(1), bulletMatcher.group(2), Math.max(paragraph.getLevelHint(), 3));
         }
 
@@ -503,7 +503,11 @@ public class WordImportServiceImpl implements WordImportService {
         if (!matcher.matches()) {
             return null;
         }
-        return new HeadingInfo(matcher.group(1), matcher.group(2), 1);
+        String title = matcher.group(2);
+        if (!isLikelyStructuredHeading(title)) {
+            return null;
+        }
+        return new HeadingInfo(matcher.group(1), title, 1);
     }
 
     private HeadingInfo parseByChineseSection(String text) {
@@ -522,7 +526,11 @@ public class WordImportServiceImpl implements WordImportService {
         if (!matcher.matches()) {
             return null;
         }
-        return new HeadingInfo(matcher.group(1), matcher.group(2), 2);
+        String title = matcher.group(2);
+        if (!isLikelyStructuredHeading(title)) {
+            return null;
+        }
+        return new HeadingInfo(matcher.group(1), title, 2);
     }
 
     private Integer parseHeadingLevelByStyle(String style) {
@@ -538,6 +546,16 @@ public class WordImportServiceImpl implements WordImportService {
             }
         }
         return null;
+    }
+
+    private boolean isLikelyStructuredHeading(String title) {
+        if (!isLikelyTitle(title)) {
+            return false;
+        }
+        if (title.length() > 40) {
+            return false;
+        }
+        return !title.matches(".*[，,。；;！？?!].*");
     }
 
     private boolean isLikelyTitle(String text) {
